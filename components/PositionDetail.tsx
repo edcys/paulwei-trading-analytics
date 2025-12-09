@@ -25,21 +25,28 @@ export function PositionDetail({ session, onBack }: PositionDetailProps) {
         ? ((session.avgExitPrice - session.avgEntryPrice) / session.avgEntryPrice * 100)
         : 0;
 
-    // Calculate running position for each trade
-    let runningPosition = 0;
-    const tradesWithPosition = session.trades.map(trade => {
-        const positionBefore = runningPosition;
-        if (trade.side === 'buy') {
-            runningPosition += trade.amount;
-        } else {
-            runningPosition -= trade.amount;
-        }
-        return {
-            ...trade,
-            positionBefore,
-            positionAfter: runningPosition
-        };
-    });
+    // Calculate running position for each trade without mutating render-time variables
+    const tradesWithPosition = React.useMemo(() => {
+        const result = session.trades.reduce<{ runningPosition: number; trades: Array<Trade & { positionBefore: number; positionAfter: number; }> }>((acc, trade) => {
+            const positionBefore = acc.runningPosition;
+            const positionAfter = trade.side === 'buy'
+                ? positionBefore + trade.amount
+                : positionBefore - trade.amount;
+
+            acc.trades.push({
+                ...trade,
+                positionBefore,
+                positionAfter
+            });
+
+            return {
+                runningPosition: positionAfter,
+                trades: acc.trades
+            };
+        }, { runningPosition: 0, trades: [] });
+
+        return result.trades;
+    }, [session.trades]);
 
     return (
         <div className="space-y-6 animate-in fade-in slide-in-from-right-4 duration-300">
