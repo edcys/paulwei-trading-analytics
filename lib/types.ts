@@ -136,6 +136,39 @@ export interface TradingStats {
     monthlyPnl: { month: string; pnl: number; funding: number; trades: number }[];
 }
 
+// ============ Timeline Types ============
+
+export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
+
+export interface TimelineCandle {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    isFuture?: boolean;
+}
+
+export interface TimelineEvent {
+    type: 'trade' | 'position' | 'wallet' | 'equity' | 'marker';
+    timestamp: number;
+    message?: string;
+    payload?: Record<string, any>;
+}
+
+export interface TimelinePoint {
+    timestamp: number;
+    symbol: string;
+    timeframe: Timeframe;
+    candle?: TimelineCandle;
+    trades: Trade[];
+    netExposure?: number;
+    walletBalance?: number;
+    equity?: number;
+    markers: TimelineEvent[];
+    isFuture?: boolean;
+}
+
 // ============ Position Session Types ============
 
 export interface PositionSession {
