@@ -9,6 +9,7 @@ import { StatsOverview } from './StatsOverview';
 import { MonthlyPnLChart } from './MonthlyPnLChart';
 import { EquityCurve } from './EquityCurve';
 import { TVChart } from './TVChart';
+import { TimeMachinePlayer } from './time-machine/TimeMachinePlayer';
 import {
     Loader2,
     ChevronLeft,
@@ -22,6 +23,17 @@ import {
 } from 'lucide-react';
 
 type ViewMode = 'overview' | 'positions' | 'trades';
+
+const TIMEFRAME_SECONDS: Record<string, number> = {
+    '1m': 60,
+    '5m': 300,
+    '15m': 900,
+    '30m': 1800,
+    '1h': 3600,
+    '4h': 14400,
+    '1d': 86400,
+    '1w': 604800,
+};
 
 export function Dashboard() {
     const [trades, setTrades] = useState<Trade[]>([]);
@@ -40,6 +52,8 @@ export function Dashboard() {
     const [selectedSession, setSelectedSession] = useState<PositionSession | null>(null);
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
+    const [timeMachineRange, setTimeMachineRange] = useState<{ from: number; to: number } | null>(null);
+    const [showKlines, setShowKlines] = useState(true);
     const limit = 20;
 
     // Helper function to align time to timeframe bucket
@@ -149,11 +163,7 @@ export function Dashboard() {
             }
             
             // Check closest between left and left-1
-            const timeframeSeconds: Record<string, number> = {
-                '1m': 60, '5m': 300, '15m': 900, '30m': 1800,
-                '1h': 3600, '4h': 14400, '1d': 86400, '1w': 604800,
-            };
-            const window = timeframeSeconds[timeframe] || 3600;
+            const window = TIMEFRAME_SECONDS[timeframe] || 3600;
             
             let closest: number | null = null;
             let minDiff = Infinity;
@@ -205,6 +215,18 @@ export function Dashboard() {
         // Sort by time
         return markers.sort((a, b) => a.time - b.time);
     }, [selectedSession, allTrades, timeframe, chartData.candles]);
+
+    const timeMachineFrames = useMemo(() => {
+        return chartData.candles.map((candle) => ({
+            id: String(candle.time),
+            label: new Date(candle.time * 1000).toLocaleString(),
+            timestamp: candle.time,
+        }));
+    }, [chartData.candles]);
+
+    useEffect(() => {
+        setTimeMachineRange(null);
+    }, [selectedSymbol, timeframe]);
 
     // Load Stats and Account Data
     useEffect(() => {
@@ -473,7 +495,36 @@ export function Dashboard() {
                                     ))}
                                 </div>
                             </div>
-                            <TVChart data={chartData.candles} markers={chartMarkers} loading={chartLoading} visibleRange={null} />
+                            {showKlines ? (
+                                <TVChart
+                                    data={chartData.candles}
+                                    markers={chartMarkers}
+                                    loading={chartLoading}
+                                    visibleRange={timeMachineRange}
+                                />
+                            ) : (
+                                <div className="w-full h-[500px] flex items-center justify-center bg-secondary/20 rounded-lg border border-dashed border-white/10 text-sm text-muted-foreground">
+                                    K 線已隱藏，使用下方開關重新顯示。
+                                </div>
+                            )}
+                            <div className="mt-4">
+                                <TimeMachinePlayer
+                                    frames={timeMachineFrames}
+                                    timeframeSeconds={TIMEFRAME_SECONDS[timeframe] || 3600}
+                                    onFrameChange={(frame) => {
+                                        if (!frame) {
+                                            setTimeMachineRange(null);
+                                            return;
+                                        }
+                                        const padding = (TIMEFRAME_SECONDS[timeframe] || 3600) * 50;
+                                        setTimeMachineRange({
+                                            from: frame.timestamp - padding,
+                                            to: frame.timestamp + padding,
+                                        });
+                                    }}
+                                    onKlineToggle={(show) => setShowKlines(show)}
+                                />
+                            </div>
                         </div>
                     </div>
                 )}
@@ -515,7 +566,36 @@ export function Dashboard() {
                                     ))}
                                 </div>
                             </div>
-                            <TVChart data={chartData.candles} markers={chartMarkers} loading={chartLoading} visibleRange={selectedSessionRange} />
+                            {showKlines ? (
+                                <TVChart
+                                    data={chartData.candles}
+                                    markers={chartMarkers}
+                                    loading={chartLoading}
+                                    visibleRange={timeMachineRange ?? selectedSessionRange}
+                                />
+                            ) : (
+                                <div className="w-full h-[500px] flex items-center justify-center bg-secondary/20 rounded-lg border border-dashed border-white/10 text-sm text-muted-foreground">
+                                    K 線已隱藏，使用下方開關重新顯示。
+                                </div>
+                            )}
+                            <div className="mt-4">
+                                <TimeMachinePlayer
+                                    frames={timeMachineFrames}
+                                    timeframeSeconds={TIMEFRAME_SECONDS[timeframe] || 3600}
+                                    onFrameChange={(frame) => {
+                                        if (!frame) {
+                                            setTimeMachineRange(null);
+                                            return;
+                                        }
+                                        const padding = (TIMEFRAME_SECONDS[timeframe] || 3600) * 50;
+                                        setTimeMachineRange({
+                                            from: frame.timestamp - padding,
+                                            to: frame.timestamp + padding,
+                                        });
+                                    }}
+                                    onKlineToggle={(show) => setShowKlines(show)}
+                                />
+                            </div>
                         </section>
 
                         {/* Data Section */}
