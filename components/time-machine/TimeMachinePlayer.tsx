@@ -1,159 +1,126 @@
-"use client";
+'use client';
 
-import { useMemo } from "react";
-import { TimeMachineTimeline } from "@/lib/types";
-import { PLAYBACK_SPEEDS, useTimeMachinePlayer } from "./useTimeMachinePlayer";
+import React, { useEffect, useMemo } from 'react';
+import { Pause, Play, RotateCcw, RotateCw } from 'lucide-react';
+import { TimeMachineFrame, useTimeMachinePlayer } from './useTimeMachinePlayer';
 
-function formatTimestamp(time?: number) {
-  if (!time) return "-";
-  return new Date(time * 1000).toLocaleString();
+interface TimeMachinePlayerProps {
+    frames: TimeMachineFrame[];
+    timeframeSeconds?: number;
+    onFrameChange?: (frame: TimeMachineFrame | null) => void;
+    onKlineToggle?: (show: boolean) => void;
 }
 
-export function TimeMachinePlayer({ dataset }: { dataset: TimeMachineTimeline }) {
-  const player = useTimeMachinePlayer(dataset.points);
+const SPEED_HINTS = ['1 (0.5x)', '2 (1x)', '3 (2x)', '4 (4x)', '5 (8x)'];
 
-  const progress = useMemo(() => {
-    if (player.points.length === 0) return 0;
-    return Math.round((player.currentIndex / Math.max(player.points.length - 1, 1)) * 100);
-  }, [player.currentIndex, player.points.length]);
+export function TimeMachinePlayer({ frames, timeframeSeconds = 3600, onFrameChange, onKlineToggle }: TimeMachinePlayerProps) {
+    const player = useTimeMachinePlayer(frames, { defaultSpeed: 1 });
 
-  const current = player.currentPoint;
-  const trades = current?.trades ?? [];
+    useEffect(() => {
+        onFrameChange?.(player.currentFrame);
+    }, [onFrameChange, player.currentFrame]);
 
-  if (player.points.length === 0) {
+    useEffect(() => {
+        onKlineToggle?.(player.showKlines);
+    }, [onKlineToggle, player.showKlines]);
+
+    const activeRange = useMemo(() => {
+        if (!player.currentFrame) return null;
+        const padding = timeframeSeconds * 50;
+        return {
+            from: player.currentFrame.timestamp - padding,
+            to: player.currentFrame.timestamp + padding,
+        };
+    }, [player.currentFrame, timeframeSeconds]);
+
     return (
-      <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-amber-800">
-        <p className="font-semibold">尚未找到可播放的時間軸資料</p>
-        <p className="text-sm">請確認已經在根目錄放置成交/錢包 CSV 與 data/ohlcv K 線檔案。</p>
-      </div>
+        <div className="glass rounded-xl p-4 border border-white/5">
+            <div className="flex flex-col gap-3">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={player.previousFrame}
+                            title="上一幀 (←)"
+                            aria-label="上一幀"
+                            className="p-2 rounded-lg border border-white/10 hover:bg-secondary/50 transition-colors disabled:opacity-50"
+                            disabled={player.currentIndex === 0}
+                        >
+                            <RotateCcw className="w-4 h-4" />
+                        </button>
+                        <button
+                            type="button"
+                            onClick={player.togglePlay}
+                            title={player.isPlaying ? '暫停 (Space)' : '播放 (Space)'}
+                            aria-label={player.isPlaying ? '暫停' : '播放'}
+                            className="px-3 py-2 rounded-lg bg-primary/10 border border-primary/20 text-primary font-medium flex items-center gap-2"
+                        >
+                            {player.isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                            <span>{player.isPlaying ? 'Pause' : 'Play'}</span>
+                        </button>
+                        <button
+                            type="button"
+                            onClick={player.nextFrame}
+                            title="下一幀 (→)"
+                            aria-label="下一幀"
+                            className="p-2 rounded-lg border border-white/10 hover:bg-secondary/50 transition-colors disabled:opacity-50"
+                            disabled={player.currentIndex >= frames.length - 1}
+                        >
+                            <RotateCw className="w-4 h-4" />
+                        </button>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                        <span className="font-medium text-foreground">速度</span>
+                        {SPEED_HINTS.map((hint, idx) => (
+                            <button
+                                key={hint}
+                                type="button"
+                                onClick={() => player.setSpeedFromIndex(idx)}
+                                className={`px-2 py-1 rounded-md border text-[11px] transition-colors ${player.speed === [0.5, 1, 2, 4, 8][idx]
+                                        ? 'border-primary/40 text-primary bg-primary/5'
+                                        : 'border-white/5 text-muted-foreground hover:text-foreground hover:border-white/20'
+                                    }`}
+                                title={`按數字鍵 ${idx + 1} 切換到 ${hint}`}
+                            >
+                                {hint}
+                            </button>
+                        ))}
+                    </div>
+                </div>
+
+                <div className="flex items-center justify-between text-sm">
+                    <div className="flex flex-col">
+                        <span className="text-muted-foreground">目前時間</span>
+                        <span className="font-semibold text-foreground">
+                            {player.currentFrame ? player.currentFrame.label : '等待資料'}
+                        </span>
+                    </div>
+                    <label className="flex items-center gap-2 cursor-pointer" title="保留 K 線顯示設定，離開後也會記得">
+                        <input
+                            type="checkbox"
+                            className="form-checkbox h-4 w-4 text-primary rounded"
+                            checked={player.showKlines}
+                            onChange={(e) => player.setShowKlines(e.target.checked)}
+                        />
+                        <span className="text-sm text-foreground">顯示 K 線</span>
+                        <span className="text-[11px] text-muted-foreground">
+                            {player.showKlines ? '狀態：開啟 (會被記住)' : '狀態：關閉 (會被記住)'}
+                        </span>
+                    </label>
+                </div>
+
+                <div className="rounded-lg border border-dashed border-white/10 bg-secondary/30 p-3 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap gap-3">
+                        <span className="font-semibold text-foreground">快捷鍵</span>
+                        <span>Space：播放/暫停</span>
+                        <span>← →：前後一幀</span>
+                        <span>數字 1-5：切換速度</span>
+                    </div>
+                    {activeRange && (
+                        <div className="mt-2 text-[11px] text-foreground/70">可視範圍：{new Date(activeRange.from * 1000).toLocaleString()} 至 {new Date(activeRange.to * 1000).toLocaleString()}</div>
+                    )}
+                </div>
+            </div>
+        </div>
     );
-  }
-
-  return (
-    <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm text-slate-500">Time Machine / {dataset.symbol}</p>
-          <h2 className="text-xl font-semibold">{dataset.timeframe} Timeline</h2>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-indigo-500"
-            onClick={player.togglePlay}
-          >
-            {player.isPlaying ? "暫停" : "播放"}
-          </button>
-          <div className="flex items-center gap-2">
-            {PLAYBACK_SPEEDS.map((value) => (
-              <button
-                key={value}
-                onClick={() => player.setSpeed(value)}
-                className={`rounded-md px-3 py-1 text-sm font-medium transition ${
-                  player.speed === value
-                    ? "bg-slate-900 text-white"
-                    : "bg-slate-100 text-slate-700 hover:bg-slate-200"
-                }`}
-              >
-                {value}x
-              </button>
-            ))}
-          </div>
-          <label className="flex items-center gap-2 text-sm text-slate-600">
-            <input
-              type="checkbox"
-              checked={player.showFuture}
-              onChange={(event) => player.setShowFuture(event.target.checked)}
-            />
-            顯示未來 K 線
-          </label>
-        </div>
-      </header>
-
-      <div className="space-y-1">
-        <div className="flex items-center justify-between text-sm text-slate-600">
-          <span>播放進度</span>
-          <span>
-            {player.currentIndex + 1} / {player.points.length} ({progress}%)
-          </span>
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={Math.max(player.points.length - 1, 0)}
-          value={player.currentIndex}
-          onChange={(event) => player.seek(Number(event.target.value))}
-          className="w-full accent-indigo-600"
-        />
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs uppercase tracking-wide text-slate-500">當前時間</p>
-          <p className="text-lg font-semibold text-slate-900">{formatTimestamp(current?.time)}</p>
-          <div className="mt-3 grid grid-cols-2 gap-2 text-sm text-slate-700">
-            <div>
-              <p className="text-xs text-slate-500">Open</p>
-              <p className="font-medium">{current?.candle?.open?.toLocaleString() ?? '-'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500">Close</p>
-              <p className="font-medium">{current?.candle?.close?.toLocaleString() ?? '-'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500">High</p>
-              <p className="font-medium">{current?.candle?.high?.toLocaleString() ?? '-'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500">Low</p>
-              <p className="font-medium">{current?.candle?.low?.toLocaleString() ?? '-'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500">Volume</p>
-              <p className="font-medium">{current?.candle?.volume?.toLocaleString() ?? '-'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-slate-500">Equity</p>
-              <p className="font-medium">{current?.equity ? `${current.equity.toFixed(4)} BTC` : '-'}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="rounded-lg bg-slate-50 p-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs uppercase tracking-wide text-slate-500">成交打點</p>
-            <p className="text-xs text-slate-500">點擊列表可跳轉</p>
-          </div>
-          {trades.length === 0 ? (
-            <p className="mt-2 text-sm text-slate-500">此時間點沒有成交紀錄</p>
-          ) : (
-            <ul className="mt-2 space-y-2 text-sm text-slate-700">
-              {trades.map((trade) => (
-                <li
-                  key={trade.id}
-                  className="flex cursor-pointer items-center justify-between rounded-md bg-white px-3 py-2 shadow-sm transition hover:bg-indigo-50"
-                  onClick={() => player.jumpToTime(trade.time)}
-                >
-                  <span className={trade.side === "buy" ? "text-emerald-600" : "text-rose-600"}>
-                    {trade.side.toUpperCase()} {trade.quantity.toLocaleString()}
-                  </span>
-                  <span className="text-slate-500">@ {trade.price.toLocaleString()}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      </div>
-
-      {dataset.errors && dataset.errors.length > 0 && (
-        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
-          <p className="font-semibold">資料警告</p>
-          <ul className="list-inside list-disc space-y-1">
-            {dataset.errors.map((error, index) => (
-              <li key={index}>{error}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
 }
