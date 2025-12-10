@@ -192,6 +192,39 @@ export interface PositionSession {
     status: 'open' | 'closed';
 }
 
+// ============ Time Machine Types ============
+
+export interface TimelineTrade {
+    id: string;
+    time: number; // seconds since epoch
+    side: 'buy' | 'sell';
+    price: number;
+    quantity: number;
+}
+
+export interface TimelinePoint {
+    time: number;
+    candle?: {
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        volume?: number;
+    };
+    trades?: TimelineTrade[];
+    equity?: number;
+    exposureRatio?: number;
+    isFuture?: boolean;
+}
+
+export interface TimeMachineTimeline {
+    symbol: string;
+    timeframe: string;
+    points: TimelinePoint[];
+    errors?: string[];
+    range: { start: number; end: number } | null;
+}
+
 // ============ Utility Functions ============
 
 export function formatDuration(ms: number): string {
