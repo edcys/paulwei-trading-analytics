@@ -3,18 +3,38 @@
 import React, { useEffect, useRef } from 'react';
 import { createChart, ColorType, IChartApi, Time } from 'lightweight-charts';
 
-interface EquityData {
+export interface EquityData {
     time: number;
     balance: number;
 }
 
 interface EquityCurveProps {
     data: EquityData[];
+    currentIndex?: number | null;
+    highlightedIndices?: number[];
+    onPointClick?: (index: number, point: EquityData) => void;
 }
 
-export function EquityCurve({ data }: EquityCurveProps) {
+export const equityAreaSeriesOptions = {
+    lineColor: '#3b82f6',
+    topColor: 'rgba(59, 130, 246, 0.4)',
+    bottomColor: 'rgba(59, 130, 246, 0.0)',
+    lineWidth: 2,
+    priceFormat: {
+        type: 'custom' as const,
+        formatter: (price: number) => price.toFixed(4) + ' BTC',
+    },
+};
+
+export function EquityCurve({
+    data,
+    currentIndex = null,
+    highlightedIndices = [],
+    onPointClick,
+}: EquityCurveProps) {
     const chartContainerRef = useRef<HTMLDivElement>(null);
     const chartRef = useRef<IChartApi | null>(null);
+    const areaSeriesRef = useRef<ReturnType<IChartApi['addAreaSeries']> | null>(null);
 
     useEffect(() => {
         if (!chartContainerRef.current || data.length === 0) return;
@@ -42,16 +62,8 @@ export function EquityCurve({ data }: EquityCurveProps) {
         chartRef.current = chart;
 
         // Create area series
-        const areaSeries = chart.addAreaSeries({
-            lineColor: '#3b82f6',
-            topColor: 'rgba(59, 130, 246, 0.4)',
-            bottomColor: 'rgba(59, 130, 246, 0.0)',
-            lineWidth: 2,
-            priceFormat: {
-                type: 'custom',
-                formatter: (price: number) => price.toFixed(4) + ' BTC',
-            },
-        });
+        const areaSeries = chart.addAreaSeries(equityAreaSeriesOptions);
+        areaSeriesRef.current = areaSeries;
 
         const chartData = data.map(d => ({
             time: d.time as Time,
@@ -60,6 +72,17 @@ export function EquityCurve({ data }: EquityCurveProps) {
 
         areaSeries.setData(chartData);
         chart.timeScale().fitContent();
+
+        const handleClick = (param: any) => {
+            if (!onPointClick || !param.time) return;
+
+            const clickedIndex = chartData.findIndex(point => point.time === param.time);
+            if (clickedIndex !== -1) {
+                onPointClick(clickedIndex, data[clickedIndex]);
+            }
+        };
+
+        chart.subscribeClick(handleClick);
 
         const handleResize = () => {
             if (chartContainerRef.current) {
@@ -71,9 +94,47 @@ export function EquityCurve({ data }: EquityCurveProps) {
 
         return () => {
             window.removeEventListener('resize', handleResize);
+            chart.unsubscribeClick(handleClick);
             chart.remove();
+            chartRef.current = null;
+            areaSeriesRef.current = null;
         };
-    }, [data]);
+    }, [data, onPointClick]);
+
+    // Handle external crosshair position updates
+    useEffect(() => {
+        if (!chartRef.current || !areaSeriesRef.current) return;
+        if (currentIndex === null || currentIndex === undefined) {
+            chartRef.current.clearCrosshairPosition();
+            return;
+        }
+
+        const point = data[currentIndex];
+        if (!point) return;
+
+        chartRef.current.setCrosshairPosition(
+            point.balance,
+            point.time as Time,
+            areaSeriesRef.current,
+        );
+    }, [currentIndex, data]);
+
+    // Update highlighted markers
+    useEffect(() => {
+        if (!areaSeriesRef.current) return;
+
+        const markers = highlightedIndices
+            .filter(index => index >= 0 && index < data.length)
+            .map(index => ({
+                time: data[index].time as Time,
+                position: 'aboveBar' as const,
+                color: '#f59e0b',
+                shape: 'circle' as const,
+                size: 1,
+            }));
+
+        areaSeriesRef.current.setMarkers(markers);
+    }, [highlightedIndices, data]);
 
     // Calculate stats
     const startBalance = data[0]?.balance || 0;
