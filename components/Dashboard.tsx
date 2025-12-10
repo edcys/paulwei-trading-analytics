@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState, useMemo } from 'react';
-import { Trade, PositionSession } from '@/lib/types';
+import { Trade, PositionSession, toInternalSymbol } from '@/lib/types';
 import { TradeList } from './TradeList';
 import { PositionSessionList } from './PositionSessionList';
 import { PositionDetail } from './PositionDetail';
@@ -9,6 +9,7 @@ import { StatsOverview } from './StatsOverview';
 import { MonthlyPnLChart } from './MonthlyPnLChart';
 import { EquityCurve } from './EquityCurve';
 import { TVChart } from './TVChart';
+import { PositionEnergyBar } from './time-machine/PositionEnergyBar';
 import {
     Loader2,
     ChevronLeft,
@@ -41,6 +42,42 @@ export function Dashboard() {
     const [page, setPage] = useState(1);
     const [totalPages, setTotalPages] = useState(0);
     const limit = 20;
+
+    const normalizeBtcValue = (value: number | null | undefined) => {
+        if (!value || Number.isNaN(value)) return 0;
+        // BitMEX balances are usually satoshi-based; fall back to raw number for already-normalized inputs
+        return value > 100000 ? value / 100000000 : value;
+    };
+
+    const netPositionUsd = useMemo(() => {
+        if (selectedSession) return selectedSession.maxSize;
+        if (!account?.positions || account.positions.length === 0) return 0;
+
+        const symbolVariants = new Set([
+            selectedSymbol,
+            toInternalSymbol(selectedSymbol),
+        ]);
+
+        return account.positions
+            .filter(p => symbolVariants.has(p.symbol) || symbolVariants.has(p.displaySymbol))
+            .reduce((sum, pos) => sum + (pos.currentQty || 0), 0);
+    }, [account, selectedSession, selectedSymbol]);
+
+    const currentTimelinePoint = useMemo(() => {
+        const latestCandle = chartData.candles[chartData.candles.length - 1];
+        const latestPrice = latestCandle?.close || 0;
+        const walletBtc = normalizeBtcValue(account?.wallet?.marginBalance ?? account?.wallet?.walletBalance);
+        const totalCapitalUsd = latestPrice > 0 ? walletBtc * latestPrice : walletBtc;
+        const exposureRatio = totalCapitalUsd > 0 ? netPositionUsd / totalCapitalUsd : 0;
+
+        return {
+            time: latestCandle?.time || Math.floor(Date.now() / 1000),
+            latestPrice,
+            totalCapitalUsd,
+            netPositionUsd,
+            exposureRatio,
+        };
+    }, [account, chartData.candles, netPositionUsd]);
 
     // Helper function to align time to timeframe bucket
     const alignToTimeframe = (timestamp: number, tf: string): number => {
@@ -453,24 +490,30 @@ export function Dashboard() {
 
                         {/* Price Chart */}
                         <div className="glass rounded-xl p-6 hover-card">
-                            <div className="flex justify-between items-center mb-6">
+                            <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
                                 <h3 className="text-lg font-semibold flex items-center gap-2 text-foreground">
                                     <Activity className="w-5 h-5 text-primary" />
                                     Price Action <span className="text-muted-foreground text-sm font-normal ml-2">{selectedSymbol.split(':')[0]}</span>
                                 </h3>
-                                <div className="flex bg-secondary/30 rounded-lg p-1 border border-white/5 overflow-x-auto">
-                                    {(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const).map((tf) => (
-                                        <button
-                                            key={tf}
-                                            onClick={() => setTimeframe(tf)}
-                                            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all whitespace-nowrap ${timeframe === tf
-                                                    ? 'bg-primary/10 text-primary shadow-sm'
-                                                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-                                                }`}
-                                        >
-                                            {tf.toUpperCase()}
-                                        </button>
-                                    ))}
+                                <div className="flex items-center gap-3">
+                                    <PositionEnergyBar exposureRatio={currentTimelinePoint.exposureRatio} className="w-64 hidden md:block" />
+                                    <div className="md:hidden text-xs font-semibold text-muted-foreground">
+                                        {(currentTimelinePoint.exposureRatio * 100).toFixed(1)}% 曝險
+                                    </div>
+                                    <div className="flex bg-secondary/30 rounded-lg p-1 border border-white/5 overflow-x-auto">
+                                        {(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const).map((tf) => (
+                                            <button
+                                                key={tf}
+                                                onClick={() => setTimeframe(tf)}
+                                                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all whitespace-nowrap ${timeframe === tf
+                                                        ? 'bg-primary/10 text-primary shadow-sm'
+                                                        : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                                                    }`}
+                                            >
+                                                {tf.toUpperCase()}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                             <TVChart data={chartData.candles} markers={chartMarkers} loading={chartLoading} visibleRange={null} />
@@ -483,7 +526,7 @@ export function Dashboard() {
                     <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
                         {/* Chart Section */}
                         <section className="glass rounded-xl p-6">
-                            <div className="flex justify-between items-center mb-6">
+                            <div className="flex flex-wrap justify-between items-center gap-4 mb-6">
                                 {selectedSession ? (
                                     <div className="flex items-center gap-3 px-4 py-2 bg-primary/10 rounded-xl border border-primary/20">
                                         <span className="relative flex h-2 w-2">
@@ -500,19 +543,25 @@ export function Dashboard() {
                                         {selectedSymbol.split(':')[0]} Chart
                                     </h3>
                                 )}
-                                <div className="flex bg-secondary/30 rounded-lg p-1 border border-white/5 overflow-x-auto">
-                                    {(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const).map((tf) => (
-                                        <button
-                                            key={tf}
-                                            onClick={() => setTimeframe(tf)}
-                                            className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all whitespace-nowrap ${timeframe === tf
-                                                    ? 'bg-primary/10 text-primary shadow-sm'
-                                                    : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
-                                                }`}
-                                        >
-                                            {tf.toUpperCase()}
-                                        </button>
-                                    ))}
+                                <div className="flex items-center gap-3">
+                                    <PositionEnergyBar exposureRatio={currentTimelinePoint.exposureRatio} className="w-64 hidden md:block" />
+                                    <div className="md:hidden text-xs font-semibold text-muted-foreground">
+                                        {(currentTimelinePoint.exposureRatio * 100).toFixed(1)}% 曝險
+                                    </div>
+                                    <div className="flex bg-secondary/30 rounded-lg p-1 border border-white/5 overflow-x-auto">
+                                        {(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w'] as const).map((tf) => (
+                                            <button
+                                                key={tf}
+                                                onClick={() => setTimeframe(tf)}
+                                                className={`px-2.5 py-1 rounded-md text-xs font-medium transition-all whitespace-nowrap ${timeframe === tf
+                                                        ? 'bg-primary/10 text-primary shadow-sm'
+                                                        : 'text-muted-foreground hover:text-foreground hover:bg-white/5'
+                                                    }`}
+                                            >
+                                                {tf.toUpperCase()}
+                                            </button>
+                                        ))}
+                                    </div>
                                 </div>
                             </div>
                             <TVChart data={chartData.candles} markers={chartMarkers} loading={chartLoading} visibleRange={selectedSessionRange} />
