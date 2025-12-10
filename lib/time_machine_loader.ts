@@ -1,152 +1,176 @@
-import 'server-only';
 import {
-  formatSymbol,
-  getEquityCurve,
-  getOHLCData,
-  loadTradesFromCSV,
-  TimelinePoint,
-  TimelineTrade,
-  TimeMachineTimeline,
-} from './data_loader';
+    Trade,
+    WalletTransaction,
+    PositionSession,
+    TimelinePoint,
+    TimelineEvent,
+    Timeframe,
+    TimelineCandle,
+    toInternalSymbol,
+} from './types';
+import { getPositionSessions, loadTradesFromCSV, loadWalletHistoryFromCSV } from './data_loader';
 
-const TIMEFRAME_SECONDS: Record<string, number> = {
-  '1m': 60,
-  '5m': 300,
-  '15m': 900,
-  '30m': 1800,
-  '1h': 3600,
-  '4h': 14400,
-  '1d': 86400,
-  '1w': 604800,
-};
-
-function getBucket(timestamp: number, timeframe: string): number {
-  const bucketSize = TIMEFRAME_SECONDS[timeframe] ?? TIMEFRAME_SECONDS['1d'];
-  return Math.floor(timestamp / bucketSize) * bucketSize;
-}
-
-function mapTradesToTimeline(trades: TimelineTrade[], timeframe: string): Map<number, TimelinePoint> {
-  const points = new Map<number, TimelinePoint>();
-
-  trades.forEach((trade) => {
-    const bucket = getBucket(trade.time, timeframe);
-    const existing = points.get(bucket) ?? {
-      time: bucket,
-      trades: [],
+function timeframeToMs(timeframe: Timeframe): number {
+    const units: Record<Timeframe, number> = {
+        '1m': 60 * 1000,
+        '5m': 5 * 60 * 1000,
+        '15m': 15 * 60 * 1000,
+        '1h': 60 * 60 * 1000,
+        '4h': 4 * 60 * 60 * 1000,
+        '1d': 24 * 60 * 60 * 1000,
     };
-    existing.trades = [...(existing.trades ?? []), trade];
-    points.set(bucket, existing);
-  });
 
-  return points;
+    return units[timeframe];
 }
 
-export interface TimeMachineOptions {
-  symbol?: string;
-  timeframe?: keyof typeof TIMEFRAME_SECONDS;
-  clipToRange?: boolean;
+function getBucketStart(timestamp: number, timeframe: Timeframe): number {
+    const frameMs = timeframeToMs(timeframe);
+    return Math.floor(timestamp / frameMs) * frameMs;
 }
 
-export async function buildTimeMachineTimeline(
-  options: TimeMachineOptions = {},
-): Promise<TimeMachineTimeline> {
-  const symbol = options.symbol ?? 'BTCUSD';
-  const timeframe = options.timeframe ?? '1d';
-  const errors: string[] = [];
-
-  const ohlcTimeframe = (['1h', '4h', '1d', '1w'] as const).includes(timeframe as any)
-    ? (timeframe as '1h' | '4h' | '1d' | '1w')
-    : '1d';
-
-  let candlePoints: TimelinePoint[] = [];
-  try {
-    const { candles } = getOHLCData(symbol, ohlcTimeframe);
-    candlePoints = candles.map((candle) => ({
-      time: candle.time,
-      candle: {
-        open: candle.open,
-        high: candle.high,
-        low: candle.low,
-        close: candle.close,
-        volume: candle.volume,
-      },
-      trades: [],
-    }));
-  } catch (error) {
-    errors.push(
-      error instanceof Error
-        ? error.message
-        : '無法載入 K 線資料，請確認 CSV 是否存在',
+function filterBySymbol<T extends { symbol: string; displaySymbol: string }>(
+    items: T[],
+    symbol: string,
+): T[] {
+    const internalSymbol = toInternalSymbol(symbol);
+    return items.filter(
+        (item) => item.symbol === symbol || item.symbol === internalSymbol || item.displaySymbol === symbol,
     );
-  }
+}
 
-  let tradePoints = new Map<number, TimelinePoint>();
-  try {
-    const trades = loadTradesFromCSV()
-      .filter((trade) => formatSymbol(trade.symbol) === formatSymbol(symbol))
-      .map<TimelineTrade>((trade) => ({
-        id: trade.id,
-        time: Math.floor(new Date(trade.datetime).getTime() / 1000),
-        side: trade.side,
-        price: trade.price,
-        quantity: trade.amount,
-      }));
+function aggregateCandle(candle: TimelineCandle | undefined, trade: Trade): TimelineCandle {
+    const base: TimelineCandle =
+        candle || ({ open: trade.price, high: trade.price, low: trade.price, close: trade.price, volume: 0 } as const);
 
-    tradePoints = mapTradesToTimeline(trades, timeframe);
-  } catch (error) {
-    errors.push(
-      error instanceof Error
-        ? error.message
-        : '無法載入成交資料，請確認 CSV 是否存在',
-    );
-  }
+    return {
+        open: base.open,
+        high: Math.max(base.high, trade.price),
+        low: Math.min(base.low, trade.price),
+        close: trade.price,
+        volume: base.volume + trade.amount,
+    };
+}
 
-  const pointMap = new Map<number, TimelinePoint>();
-
-  [...candlePoints, ...tradePoints.values()].forEach((point) => {
-    const existing = pointMap.get(point.time);
-    if (existing) {
-      pointMap.set(point.time, {
-        ...existing,
-        ...point,
-        trades: [...(existing.trades ?? []), ...(point.trades ?? [])],
-      });
-    } else {
-      pointMap.set(point.time, point);
+function ensureBucket(
+    buckets: Map<number, TimelinePoint>,
+    bucket: number,
+    symbol: string,
+    timeframe: Timeframe,
+): TimelinePoint {
+    if (!buckets.has(bucket)) {
+        buckets.set(bucket, {
+            timestamp: bucket,
+            symbol,
+            timeframe,
+            trades: [],
+            markers: [],
+        });
     }
-  });
 
-  try {
-    const equity = getEquityCurve();
-    equity.forEach((balancePoint) => {
-      const bucket = getBucket(balancePoint.time, timeframe);
-      const existing = pointMap.get(bucket) ?? { time: bucket };
-      pointMap.set(bucket, {
-        ...existing,
-        equity: balancePoint.balance,
-      });
+    return buckets.get(bucket)!;
+}
+
+function addPositionMarkers(markers: TimelineEvent[], session: PositionSession, key: 'openTime' | 'closeTime') {
+    const time = session[key];
+    if (!time) return;
+
+    markers.push({
+        type: 'position',
+        timestamp: new Date(time).getTime(),
+        payload: {
+            id: session.id,
+            side: session.side,
+            maxSize: session.maxSize,
+            status: key === 'openTime' ? 'opened' : 'closed',
+        },
+        message: `${key === 'openTime' ? 'Opened' : 'Closed'} ${session.side} session (${session.displaySymbol})`,
     });
-  } catch (error) {
-    errors.push(
-      error instanceof Error
-        ? error.message
-        : '無法載入資金曲線資料，請確認 CSV 是否存在',
+}
+
+function normalizeWallet(w: WalletTransaction) {
+    const SAT_TO_BTC = 100000000;
+    return {
+        ...w,
+        walletBalance: w.walletBalance / SAT_TO_BTC,
+        marginBalance: w.marginBalance !== null ? w.marginBalance / SAT_TO_BTC : null,
+    };
+}
+
+export function buildTimeline(
+    symbol: string = 'BTCUSD',
+    timeframe: Timeframe = '1h',
+): TimelinePoint[] {
+    const trades = filterBySymbol(loadTradesFromCSV(), symbol).sort(
+        (a, b) => new Date(a.datetime).getTime() - new Date(b.datetime).getTime(),
     );
-  }
+    const walletHistory = loadWalletHistoryFromCSV().map(normalizeWallet).sort(
+        (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+    );
+    const sessions = filterBySymbol(getPositionSessions(), symbol);
 
-  const points = Array.from(pointMap.values()).sort((a, b) => a.time - b.time);
+    const buckets = new Map<number, TimelinePoint>();
+    let cumulativeExposure = 0;
 
-  return {
-    symbol,
-    timeframe,
-    points,
-    errors,
-    range:
-      points.length > 0
-        ? {
-            start: points[0].time,
-            end: points[points.length - 1].time,
-          }
-        : null,
-  };
+    trades.forEach((trade) => {
+        const ts = new Date(trade.datetime).getTime();
+        const bucket = getBucketStart(ts, timeframe);
+        const point = ensureBucket(buckets, bucket, symbol, timeframe);
+        point.trades.push(trade);
+        point.candle = aggregateCandle(point.candle, trade);
+        cumulativeExposure += trade.side === 'buy' ? trade.amount : -trade.amount;
+        point.netExposure = cumulativeExposure;
+    });
+
+    walletHistory.forEach((wallet) => {
+        const ts = new Date(wallet.timestamp).getTime();
+        const bucket = getBucketStart(ts, timeframe);
+        const point = ensureBucket(buckets, bucket, symbol, timeframe);
+        point.walletBalance = wallet.walletBalance;
+        if (wallet.marginBalance !== null) {
+            point.equity = wallet.marginBalance;
+        }
+        point.markers.push({
+            type: 'wallet',
+            timestamp: ts,
+            payload: { amount: wallet.amount, walletBalance: wallet.walletBalance, marginBalance: wallet.marginBalance },
+            message: wallet.text || wallet.transactType,
+        });
+    });
+
+    sessions.forEach((session) => {
+        const openTs = new Date(session.openTime).getTime();
+        const openBucket = getBucketStart(openTs, timeframe);
+        const openPoint = ensureBucket(buckets, openBucket, symbol, timeframe);
+        addPositionMarkers(openPoint.markers, session, 'openTime');
+        if (session.closeTime) {
+            const closeTs = new Date(session.closeTime).getTime();
+            const closeBucket = getBucketStart(closeTs, timeframe);
+            const closePoint = ensureBucket(buckets, closeBucket, symbol, timeframe);
+            addPositionMarkers(closePoint.markers, session, 'closeTime');
+        }
+    });
+
+    const lastHistoricalTime = Math.max(
+        trades.length ? new Date(trades[trades.length - 1].datetime).getTime() : 0,
+        walletHistory.length ? new Date(walletHistory[walletHistory.length - 1].timestamp).getTime() : 0,
+        sessions.length
+            ? Math.max(
+                  ...sessions
+                      .flatMap((s) => [s.openTime, s.closeTime].filter(Boolean))
+                      .map((t) => new Date(t!).getTime()),
+              )
+            : 0,
+    );
+
+    const timeline = Array.from(buckets.values())
+        .sort((a, b) => a.timestamp - b.timestamp)
+        .map((point) => ({
+            ...point,
+            candle: point.candle
+                ? { ...point.candle, isFuture: point.timestamp > lastHistoricalTime }
+                : undefined,
+            isFuture: point.timestamp > lastHistoricalTime,
+        }));
+
+    return timeline;
 }
