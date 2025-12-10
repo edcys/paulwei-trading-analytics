@@ -136,6 +136,39 @@ export interface TradingStats {
     monthlyPnl: { month: string; pnl: number; funding: number; trades: number }[];
 }
 
+// ============ Timeline Types ============
+
+export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
+
+export interface TimelineCandle {
+    open: number;
+    high: number;
+    low: number;
+    close: number;
+    volume: number;
+    isFuture?: boolean;
+}
+
+export interface TimelineEvent {
+    type: 'trade' | 'position' | 'wallet' | 'equity' | 'marker';
+    timestamp: number;
+    message?: string;
+    payload?: Record<string, any>;
+}
+
+export interface TimelinePoint {
+    timestamp: number;
+    symbol: string;
+    timeframe: Timeframe;
+    candle?: TimelineCandle;
+    trades: Trade[];
+    netExposure?: number;
+    walletBalance?: number;
+    equity?: number;
+    markers: TimelineEvent[];
+    isFuture?: boolean;
+}
+
 // ============ Position Session Types ============
 
 export interface PositionSession {
@@ -157,6 +190,39 @@ export interface PositionSession {
     tradeCount: number;
     trades: Trade[];
     status: 'open' | 'closed';
+}
+
+// ============ Time Machine Types ============
+
+export interface TimelineTrade {
+    id: string;
+    time: number; // seconds since epoch
+    side: 'buy' | 'sell';
+    price: number;
+    quantity: number;
+}
+
+export interface TimelinePoint {
+    time: number;
+    candle?: {
+        open: number;
+        high: number;
+        low: number;
+        close: number;
+        volume?: number;
+    };
+    trades?: TimelineTrade[];
+    equity?: number;
+    exposureRatio?: number;
+    isFuture?: boolean;
+}
+
+export interface TimeMachineTimeline {
+    symbol: string;
+    timeframe: string;
+    points: TimelinePoint[];
+    errors?: string[];
+    range: { start: number; end: number } | null;
 }
 
 // ============ Utility Functions ============
